@@ -120,7 +120,7 @@ static struct cl_object_type section_type = {
 	.free_space	= free_space,
 };
 
-struct ko_section *ks_create(struct ko_process *where, unsigned long type, unsigned long base, unsigned long size, page_prot_t prot)
+struct ko_section *ks_create(struct ko_process *where, unsigned long type, unsigned long base, size_t size, page_prot_t prot)
 {
 	struct ko_section *p;
 	
@@ -259,10 +259,14 @@ void __init ks_init()
 	/* Trim the memory mapping, i386 is full mapping */
 	km_arch_trim(); 
 	ks_exception_init();
+#ifdef __arm__
+	printk("ks_init currently not supported arm for virtual memory access.\n");
+#else
 	km_valloc_init();
 	
 	/* Message system need virtual memory */
 	ktm_init();
+#endif
 }
 
 //------------test-----------------

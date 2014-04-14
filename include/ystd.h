@@ -15,6 +15,8 @@
 #define _Y_STANDARD_H
 
 #include <compiler.h>
+#include <types.h>
+#include <kernel/kernel.h>
 
 BEGIN_C_DECLS;
 
@@ -22,17 +24,30 @@ BEGIN_C_DECLS;
 typedef unsigned long y_handle;
 #define Y_INVALID_HANDLE (-1UL)
 
+/************************************************************************/
+/* 进程                                                                         */
+/************************************************************************/
 typedef enum 
 {
 	Y_SYNC_WAIT_RESULT_OK	= 0,
 	Y_SYNC_WAIT_ABANDONED	= -1,
 	Y_SYNC_WAIT_TIMEDOUT	= -2,
 	Y_SYNC_WAIT_ERROR		= -3,
-}y_wait_result;
+} y_wait_result;
 
-/************************************************************************/
-/* 进程                                                                         */
-/************************************************************************/
+struct y_thread_environment_block
+{
+	void *self;
+	void *mi;
+};
+
+struct y_message
+{
+	unsigned short count;
+	volatile unsigned short flags;
+	unsigned long what;	
+};
+
 /**
 	@brief 创立进程
 
@@ -53,6 +68,21 @@ y_handle y_process_create(xstring name, char *cmdline);
 */
 y_wait_result y_process_wait_exit(y_handle for_who, unsigned long * __in __out result);
 
+/**
+	@brief 读取消息
+
+	消息处理触发函数被调用外，一般还可以携带数据
+
+	@param[in] what 消息对象，用户实际上不直接访问这个结构中的内容。
+
+	@note:
+		该函数的用法举例:
+		y_message_read(msg, &arg0, &arg1);
+		其中arg0 和argv1 是unsigned long类型
+*/
+void y_message_read(struct y_message *what, ...);
+
+
 /************************************************************************/
 /* 同步对象                                                                     */
 /************************************************************************/
@@ -68,6 +98,135 @@ typedef enum {
 	@brief 等待线程消息
 */
 y_msg_loop_result y_message_loop();
+
+/************************************************************************/
+/* 文件对象                                                                     */
+/************************************************************************/
+/*
+	@brief 文件以及目录改变事件类型
+*/
+typedef enum{
+	Y_FILE_EVENT_READ  = (1 << 0),
+	Y_FILE_EVENT_WRITE = (1 << 1)
+} y_file_event_type_t;
+
+/*
+	@brief 打开文件初始化文件操作类型
+*/
+typedef enum{
+	Y_FILE_OPERATION_CACHE = 1,
+	Y_FILE_OPERATION_NOCACHE
+} y_file_operation_type_t;
+
+/**
+	@brief 打开文件
+
+	系统原生接口，目前还木有具体完善，因此参数
+	就一个
+
+	@return
+		返回文件对象句柄
+*/
+y_handle y_file_open(const char *path, y_file_operation_type_t ops_type);
+
+/**
+	@brief 读取文件
+
+	读取打开成功的文件到buffer 中
+
+	@param[in] file 要读取的文件
+	@param[in] buffer 要写入的缓冲区，用户保证缓冲区长度起码有	size长度 	
+	@param[in] size 读取长度
+
+	@return
+		>0 表示成功读取的字节数，不会超过过size,
+		<0表示错误码.
+*/	
+ssize_t y_file_read(y_handle file, void *buffer, size_t size);
+
+/**
+	@brief 写入文件
+
+	把用户指定buffer 写入打开成功的文件
+
+	@param[in] file 要写入的文件
+	@param[in] buffer 源缓冲区，用户保证缓冲区长度起码有	size长度 	
+	@param[in] size 写入长度
+
+	@return
+		>0 表示成功读取的字节数，不会超过过size,
+		<0表示错误码.
+*/	
+ssize_t y_file_write(y_handle file, void *buffer, size_t size);
+
+/**
+	@brief Seek file
+
+*/
+int y_file_seek(y_handle file, loff_t where, int whence);
+
+/**
+	@brief 关闭文件
+
+	关闭打开的y_handle 文件
+*/
+void y_file_close(y_handle file);
+
+
+/**
+	@brief 注册文件监听事件
+
+	当文件的某个被监听的事件被其他进程触发，那么
+	用户通过本函数注册的回调函数将在消息循环的时候被
+	调用，因此用户需要准备一个消息循环的线程来处理
+	该回调，一般是第一个线程来做消息循环。
+
+	@param[in] file 要监听哪个文件
+	@param[in] event_mask 事件类型，可以多个组合，参见y_file_event_type_t
+	@param[in] func 事件发生时的回调函数
+	@param[in] para 事件发生时回调函数的参数
+	
+	@return
+		等于0正常，<0 则为错误码。
+*/
+int y_file_event_register(y_handle file, y_file_event_type_t event_mask, void *func, void *para);
+
+/**
+	@brief 取消监听某个文件的事件
+
+	如果用户以前建听过某个文件的某些事件，那么可以通过
+	本接口取消关心这些事件，从而就不会有回调消息被发送该本进程的消息循环上。
+	如果要被取消的事件以前没有注册，那么本函数返回错误码。
+
+	
+	@param[in] file 要监听哪个文件
+	@param[in] event_mask 事件类型，可以多个组合，参见y_file_event_type_t
+
+	@return
+		等于0正常，<0 则为错误码。
+*/
+int y_file_event_unregister(y_handle file, y_file_event_type_t event_mask);
+
+/**
+	@brief 将文件映射在用户空间虚拟内存
+	
+	若用户要像使用内存访问一样访问一个文件,可以使用该方法将文件
+	映射入用户虚拟内存空间
+
+	@param[in] file 要映射的文件
+	@param[in] len  映射的长度
+	@param[in] prot  映射的页面权限
+	@param[in] flags The  flags argument determines whether updates to the mapping are visi-
+					ble to other processes mapping the same region, and whether updates are
+					carried through to the underlying file.
+	@param[in] offset 从文件偏移长度开始映射
+
+	@return
+		成功返回映射到用户虚拟空间的地址,失败返回NULL
+*/
+void * y_file_mmap(y_handle file, size_t len, page_prot_t prot, int flags, off_t offset);
+
+
 
 /************************************************************************/
 /* CONSOLE                                                              */

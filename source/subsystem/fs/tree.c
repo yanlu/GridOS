@@ -4,7 +4,9 @@
 	All rights reserved.
 */
 
+#include <kernel/ke_thread.h>
 #include <kernel/ke_memory.h>
+#include <kernel/ke_lock.h>
 #include <ddk/debug.h>
 
 #include <errno.h>
@@ -54,7 +56,7 @@ static int import_file(struct fss_file *current_path)
 	
 	if (current_path->t.dir.tree_flags & FSS_FILE_TREE_COMPLETION)
 		goto end;
-	if (current_path->private == (void*)-1/*Not open before*/)
+	if (!current_path->private/*Not open before*/)
 	{
 		ret = -EIO;
 		current_path->private = current_path->volumn->drv->ops->fOpen(current_path->parent->private, current_path->name);
@@ -85,7 +87,7 @@ static int import_file(struct fss_file *current_path)
 
 		if (p->type == 4/*DT_DIR*/)
 			type = FSS_FILE_TYPE_DIR;
-		f = fss_file_new(current_path, (void*)-1/*Not open, error fd*/, p->name, type);
+		f = fss_file_new(current_path, NULL/*Not open, error fd*/, p->name, type);
 		if (!f)
 		{
 			ret = -ENOMEM;
@@ -101,6 +103,11 @@ end:
 	if (entries)
 		km_vfree(entries);
 	return ret;
+}
+
+int fss_tree_make_full(struct fss_file *current_path)
+{
+	return import_file(current_path);
 }
 
 static struct fss_file *get_file_by_name(struct list_head *node, struct fss_file *current_path, xstring file_name, int iStart, int iEnd)
@@ -367,7 +374,6 @@ loop_file_l1:
 		}
 	}
 
-just_have_dir:
 	if(action)
 		return (void*)action(cur_dir, LOOP_FILE_END, NULL, 0, 0, context);	
 	else
@@ -394,7 +400,10 @@ struct fss_file *fss_file_new(struct fss_file *father, void *private, const char
 	file->type = type;	
 	file->private = private;
 	fss_mltt_init(file);
-
+	
+	INIT_LIST_HEAD(&file->notify_list);
+	ke_spin_init(&file->notify_lock);
+	
 	/* 目录特有的数据 */
 	if (type == FSS_FILE_TYPE_DIR)
 	{
@@ -442,7 +451,7 @@ bool fss_tree_init(struct fss_volumn *v, struct fss_vfs_driver *drv, void *root_
 	ke_atomic_inc(&v->using_count);
 
 	/* Create a thread to maintain the tree on the volumn */
-	kt_create_kernel(tree_thread, v);
+	ke_create_kernel(tree_thread, v);
 
 	return true;
 	

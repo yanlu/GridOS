@@ -70,6 +70,7 @@ static inline unsigned long system_call(void *  req_package)
 #define SYS_REQ_KERNEL_PRINTF				(SYS_REQ_KERNEL_BASE + 4)
 #define SYS_REQ_KERNEL_PROCESS_HANDLE_EXE	(SYS_REQ_KERNEL_BASE + 5)
 #define SYS_REQ_KERNEL_THREAD_MSG			(SYS_REQ_KERNEL_BASE + 6)
+#define SYS_REQ_KERNEL_THREAD_TEB			(SYS_REQ_KERNEL_BASE + 7)
 
 #define SYS_REQ_KERNEL_VIRTUAL_ALLOC		(SYS_REQ_KERNEL_BASE + 20)
 
@@ -90,7 +91,9 @@ static inline unsigned long system_call(void *  req_package)
 #define SYS_REQ_FILE_FTRUNCATE	(SYS_REQ_FILE_BASE + 6)
 #define SYS_REQ_FILE_CREATE		(SYS_REQ_FILE_BASE + 7)
 #define SYS_REQ_FILE_READDIR	(SYS_REQ_FILE_BASE + 8)
-#define _SYS_REQ_FILE_MAX		9
+#define SYS_REQ_FILE_NOTIFY		(SYS_REQ_FILE_BASE + 9)
+#define SYS_REQ_FILE_MAP		(SYS_REQ_FILE_BASE + 10)
+#define _SYS_REQ_FILE_MAX		11
 
 /************************************************************************/
 /* Session and User Manager                                             */

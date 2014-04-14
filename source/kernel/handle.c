@@ -21,8 +21,6 @@ static unsigned long allocated_size;
 
 static void * get_handle_table(struct ko_process * on)
 {
-	void * table;
-	
 	spin_lock(&on->handle_lock);
 	return on->handle_table;
 }
@@ -93,6 +91,8 @@ void *ke_handle_translate(ke_handle handle)
 	handle_table = get_handle_table(on);
 	
 	kobject = i2p_find(handle_table, handle);
+
+	/* We have to inc ref, because other peaple may put it to zero. */
 	if (kobject)
 		cl_object_inc_ref(kobject);
 	
@@ -101,10 +101,9 @@ void *ke_handle_translate(ke_handle handle)
 	return kobject;
 }
 
-int ke_handle_put(ke_handle handle, void *kobject)
+void ke_handle_put(ke_handle handle, void *kobject)
 {
-	//TODO
-	TODO("Add put method");
+	cl_object_dec_ref(kobject);
 }
 
 ke_handle ke_handle_create_on_specific(struct ko_process *on, void *kobject)

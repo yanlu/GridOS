@@ -8,12 +8,13 @@
 #include <kernel/ke_srv.h>
 
 #include <ddk/compiler.h>
-#include <ddk/debug.h>
 #include <errno.h>
 
+#include <fss.h>
 #include <vfs.h>
 #include <node.h>
 #include <cache.h>
+#include <fsnotify.h>
 
 #include "sys/file_req.h"
 
@@ -98,6 +99,14 @@ err:
 /************************************************************************/
 /* File                                                                 */
 /************************************************************************/
+void fss_dbd_make_dirty(struct fss_file * who, struct dbd *which)
+{
+	/* 回写线程将通过dirty 来判断该不该回写 */
+	FSS_DBD_LOCK(which);
+	which->flags |= DB_DIRTY;
+	FSS_DBD_UNLOCK(which);
+}
+
 ssize_t fss_dbd_make_valid(struct fss_file * who, struct dbd * which)
 {
 	unsigned long size = FSS_CACHE_DB_SIZE;
@@ -133,16 +142,16 @@ struct fss_file *fss_open(struct fss_file *current_dir, char *name)
 	if (!f)
 		goto err0;
 	
-	//if (!f->private)
+	if (!f->private)
 	{
 		f->private = f->volumn->drv->ops->fOpen(f->parent->private, f->name);
 		if (f->private == NULL)
-		{
-			//TODO: Close the vfs
-			TODO("关闭僵尸文件");
-		}
+			goto err1;
 	}
 	return f;
+	
+err1:
+	fss_close(f);
 err0:
 	return NULL;
 }
@@ -152,7 +161,7 @@ void fss_close(struct fss_file *who)
 	//TODO
 }
 
-ssize_t fss_read(struct fss_file * who, unsigned long block, void *buffer)
+ssize_t fss_block_io(struct fss_file * who, unsigned long block, void *buffer, bool write)
 {
 	ssize_t ret = -ENOMEM;
 	struct dbd * which = NULL;
@@ -166,9 +175,17 @@ ssize_t fss_read(struct fss_file * who, unsigned long block, void *buffer)
 	ret = fss_dbd_make_valid(who, which);
 	if (ret < 0)
 		goto end;
-	
-	/* Read */
-	memcpy(buffer, which->buffer, FSS_CACHE_DB_SIZE);
+	if (!write)
+	{
+		memcpy(buffer, which->buffer, FSS_CACHE_DB_SIZE);
+		fnotify_msg_send(who, Y_FILE_EVENT_READ);
+	}
+	else
+	{
+		memcpy(which->buffer, buffer, FSS_CACHE_DB_SIZE);		
+		fss_dbd_make_dirty(who, which);
+		fnotify_msg_send(who, Y_FILE_EVENT_WRITE);
+	}
 	ret = which->valid_size;
 	
 end:
@@ -180,6 +197,7 @@ end:
 lsize_t fss_get_size(struct fss_file *who)
 {
 	//TODO
+	//另外fss_get_size 的调用者可能不是用lsize_t存储的，有数据溢出问题
 	return 1024*1024;
 }
 
@@ -216,28 +234,43 @@ err:
 	return KE_INVALID_HANDLE;
 }
 
+static void req_close(struct sysreq_file_close *req)
+{
+	ke_handle h = req->file;
+	struct fss_file *filp = ke_handle_translate(h);
+	
+	if (filp)
+	{
+		fss_close(filp);
+		ke_handle_put(h, filp);
+	}
+	
+	ke_handle_delete(h);
+}
+
 static ssize_t req_read(struct sysreq_file_io *req)
 {
 	ssize_t ret = -1;
 	struct fss_file *file = NULL;
 	unsigned long block = req->pos / FSS_CACHE_DB_SIZE;
 	void *buf = req->buffer;
-
+#if 0
 	/* The user buffer can be written? */
 	if (req->size != FSS_CACHE_DB_SIZE)
 		goto end;
+#endif
+
 	if (check_user_buffer(buf, req->size, 1) == false)
 		goto end;
 	file = ke_handle_translate(req->file);
 	if (!file)
 		goto end;
 
-	ret = fss_read(file, block, buf);
+	ret = fss_block_io(file, block, buf, false);
 	if (ret < 0)
 		goto end;
 
 	req->current_size = ret;
-	req->result_size = ret;
 
 end:
 	if (file)
@@ -245,14 +278,45 @@ end:
 	return ret;
 }
 
+static ssize_t req_write(struct sysreq_file_io *req)
+{
+	ssize_t ret = -1;
+	struct fss_file *file = NULL;
+	unsigned long block = req->pos / FSS_CACHE_DB_SIZE;
+	void *buf = req->buffer;
+#if 0
+	/* The user buffer can be read? */
+	if (req->size != FSS_CACHE_DB_SIZE)
+		goto end;
+#endif
+
+	if (check_user_buffer(buf, req->size, 0) == false)
+		goto end;
+	file = ke_handle_translate(req->file);
+	if (!file)
+		goto end;
+
+	ret = fss_block_io(file, block, buf, true);
+	if (ret < 0)
+		goto end;
+
+	req->current_size = ret;
+
+end:
+	if (file)
+		ke_handle_put(req->file, file);
+	return ret;
+
+}
 
 /*
 	readdir:目录读取的系统调用
 	返回目录下文件名,索引号,文件块大小
 	文件权限,创建时间
-	@return:实际读取文件数目
+	@return:
+		>= 0 写入请求缓冲区字节数  < 0 错误号
 */
-size_t req_readdir(struct sysreq_file_readdir *req)
+static size_t req_readdir(struct sysreq_file_readdir *req)
 {
 	struct fss_file *file = NULL, *child_file;
 	struct dirent_buffer *entry;
@@ -267,6 +331,13 @@ size_t req_readdir(struct sysreq_file_readdir *req)
 		goto err;
 	}
 
+	/* 请求缓冲是否合法? */
+	if (check_user_buffer(req->buffer, req->max_size, 1) == false)
+	{
+		err = -EINVAL;
+		goto err;
+	}
+	
 	file = ke_handle_translate(req->dir);	
 	/* 文件不存在或者文件不为目录? */
 	if ((!file) || (file->type != FSS_FILE_TYPE_DIR))
@@ -275,10 +346,17 @@ size_t req_readdir(struct sysreq_file_readdir *req)
 		goto err;
 	}
 	
+	/* 该目录下文件读到内存目录树嘛? */
+	if (!(file->t.dir.tree_flags & FSS_FILE_TREE_COMPLETION) &&
+		fss_tree_make_full(file) < 0)
+	{
+		err = -EIO;
+		goto err;
+	}
+	
 	/* 
 		读取目录下文件到req readdir_entry中.
-		在打开的时候,已经将目录下所有的文件都从
-		硬盘读入内存,并通过file->brother链接到dir
+		并通过file->brother链接到dir
 		->child_head内.
 	*/
 
@@ -325,6 +403,106 @@ err:
 	return err;
 }
 
+/**
+	@brief 文件通知操作
+
+	req 中的ops 有表示具体是什么操作
+
+	@return
+		error code
+*/
+static int req_notify(struct sysreq_file_notify *req)
+{
+	int r;
+	struct fss_file *file;
+
+	if (NULL == (file = ke_handle_translate(req->file)))
+	{
+		r = -EINVAL;
+		goto end;
+	}
+	
+	switch(req->ops)
+	{
+	case SYSREQ_FILE_OPS_REG_FILE_NOTIFY:
+		r = fnotify_event_register(file, req->ops_private.reg.mask,\
+									req->ops_private.reg.func, req->ops_private.reg.para);
+		break;
+		
+	case SYSREQ_FILE_OPS_UNREG_FILE_NOTIFY:
+		r = fnotify_event_unregister(file, req->ops_private.reg.mask);		
+		break;
+		
+	default:
+		r = -EINVAL;
+		break;
+	}
+
+	ke_handle_put(req->file, file);
+end:
+	return r;	
+}
+
+/**
+	@brief 处理文件影射
+	
+	req 中的ops 有表示具体是什么操作
+	
+	@return
+		1,error code
+		2,对于影射来说，在req 中返回影射地址，NULL表示映射失败
+*/
+static int req_map(struct sysreq_file_map *req)
+{
+	int r;
+	struct fss_file *file;
+
+	if (NULL == (file = ke_handle_translate(req->file)))
+	{
+		r = -EINVAL;
+		goto end;
+	}
+
+	r = 0;
+	switch(req->ops)
+	{
+	case SYSREQ_FILE_OPS_MAP:
+		{
+			size_t map_size = fss_get_size(file);
+			void *base;
+			
+			/* 请求缓冲是否合法? */
+			if (check_user_buffer(req, sizeof(req), 1) == false)				
+			{
+				r = -EINVAL;
+				goto err0;
+			}
+
+			if (NULL == (base = ke_map_file(file, map_size, req->prot)))
+				r = -ENOMEM;
+			else
+			{			
+				req->map_size = map_size;
+				req->map_base =  base;
+			}
+		}
+		break;
+		
+	case SYSREQ_FILE_OPS_UNMAP:
+		TODO("SYSREQ_FILE_OPS_UNMAP");
+		r = -ENOSYS;
+		break;
+		
+	default:
+		r = -EINVAL;
+		break;
+	}
+	
+err0:
+	ke_handle_put(req->file, file);
+end:
+	return r;
+}
 
 /* 处理函数列表，注意必须和SYS_REQ_FILE_xxx的编号一致 */
 static void * interfaces[_SYS_REQ_FILE_MAX];
@@ -355,10 +533,14 @@ void fss_main()
 	/* 初始化fss层系统调用函数 */
 	for(fs_call_num = 0; fs_call_num < _SYS_REQ_FILE_MAX; ++fs_call_num)
 		interfaces[fs_call_num] = ke_srv_null_sysxcal;
-	
 	interfaces[SYS_REQ_FILE_OPEN - SYS_REQ_FILE_BASE]    = req_open;
+	interfaces[SYS_REQ_FILE_CLOSE - SYS_REQ_FILE_BASE]   = req_close;
 	interfaces[SYS_REQ_FILE_READ - SYS_REQ_FILE_BASE]    = req_read;
+	interfaces[SYS_REQ_FILE_WRITE - SYS_REQ_FILE_BASE]   = req_write;
 	interfaces[SYS_REQ_FILE_READDIR - SYS_REQ_FILE_BASE] = req_readdir;
+	interfaces[SYS_REQ_FILE_NOTIFY - SYS_REQ_FILE_BASE]  = req_notify;
+	interfaces[SYS_REQ_FILE_MAP - SYS_REQ_FILE_BASE]     = req_map;
+	
 	
 	ke_srv_register(&ke_srv_fss);
 }

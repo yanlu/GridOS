@@ -119,9 +119,9 @@ err:
 /**
 	@brief 发送消息
 */
-static struct message *send(struct ktm *where, struct message *what, struct ke_message_wait *wait)
+static struct y_message *send(struct ktm *where, struct y_message *what, struct ke_message_wait *wait)
 {
-	struct message *dst, *tmp, *src;
+	struct y_message *dst, *tmp, *src;
 	int count, i;
 
 	count	= what->count;
@@ -151,7 +151,7 @@ static struct message *send(struct ktm *where, struct message *what, struct ke_m
 	if (i != count + 1/*the head*/) 
 	{
 		ke_spin_unlock(&where->lock);
-		printk("The message pool is full, count is %d.\n", count);
+		//printk("The message pool is full, count is %d.\n", count);
 		goto full;
 	}
 
@@ -220,10 +220,10 @@ full:
 		But if the destination is in abnormal status(such as killing by force) it will return false.
 		If I am in abnormal status, the message sending will fail too.
 */
-bool ktm_send(struct ko_thread *to, struct message *what)
+bool ktm_send(struct ko_thread *to, struct y_message *what)
 {
 	struct ke_message_wait wait;
-	struct message *sent;
+	struct y_message *sent;
 	bool r = false;
 	int try_resend = 3;
 	struct ktm *where;
@@ -264,7 +264,7 @@ try_again:
 		if (wait.wait_status == KE_MESSAGE_WAIT_STATUS_OK)
 		{
 			int i;
-			struct message *dst, *src;
+			struct y_message *dst, *src;
 			int response_count = wait.sent->count;
 			int request_count  = what->count;
 
@@ -352,7 +352,7 @@ struct ktm *ktm_prepare_loop()
 
 	The responser acknowledges a synchronous message
 */
-void ktm_ack_sync(struct message *what)
+void ktm_ack_sync(struct y_message *what)
 {
 	struct list_head *pos;
 	struct ke_message_wait *wait = NULL;
@@ -417,6 +417,15 @@ void ktm_delete()
 	who = kt_current();
 	put_thread_msg(who);
 }
+
+/*
+	@brief 提供给内核编程接口使用
+*/
+bool ke_msg_send(struct ko_thread *to, struct y_message *what)
+{
+	return ktm_send(to, what);
+}
+
 
 /**
 	@brief Init the message subsystem
