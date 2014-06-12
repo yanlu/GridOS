@@ -10,6 +10,7 @@
 #define COMMON_LIBS_MSG_H
 
 #include <ystd.h>
+#include <list.h>
 
 #define MSG_STATUS_NEW		(1 << 1)
 #define MSG_STATUS_USED_BIT	(1 << 3)
@@ -18,14 +19,16 @@
 #define MSG_FLAGS_SYNC		(1 << 5)
 
 #define __data_size__(DATA_COUNT) ((DATA_COUNT)  * sizeof(MSG_DATA_TYPE))
-#define __msg_count__(DATA_COUNT) ((__data_size__(DATA_COUNT) + sizeof(struct y_message) - 1)/*max possible size*/ / sizeof(struct y_message))
-#define MSG_MAKE(DATA_COUNT, FLAGS, NAME) \
-	struct y_message __msg__[__msg_count__(DATA_COUNT)/* Data part */ + 1/*The head of msg*/];	\
-	struct y_message *pmsg = &__msg__[0];	\
-	unsigned long *pdata = (unsigned long*) &__msg__[1];	\
-	pmsg->count = __msg_count__(DATA_COUNT);	\
-	pmsg->flags = FLAGS;	\
-	pmsg->what = (unsigned long)NAME;
+#define __add_msg_count__(DATA_COUNT) ((__data_size__(DATA_COUNT) + sizeof(struct y_message) - 1)/*max possible size*/ / sizeof(struct y_message))
+#define MSG_MAKE(NAME, FLAGS, DATA_COUNT, WHAT) \
+	struct y_message __msg##NAME__[__add_msg_count__(DATA_COUNT)/* Data part */ + 1/*The head of msg*/];	\
+	struct y_message *(NAME) = &__msg##NAME__[0];	\
+	(NAME)->count = (DATA_COUNT);	\
+	(NAME)->flags = (FLAGS);	\
+	(NAME)->what = (unsigned long)WHAT;
+#define MSG_MAKE_OUT_PARA(MSG, WRITE_NAME) \
+	unsigned long *WRITE_NAME = (unsigned long*) &(MSG)[1];	
+
 
 /**
 	@brief Data ops on received msg
@@ -60,12 +63,14 @@ struct y_message_instance;
 typedef bool (*message_filter)(struct y_message *what);
 typedef void (*message_sleep)(struct y_message_instance *msg_instance);
 typedef void (*message_response_sync)(struct y_message *what);
+typedef y_message_func (*message_find_handler)(struct y_message_instance *msg_instance, message_id_t id);
 
 struct y_message_instance
 {
 	message_filter filter;
 	message_sleep sleep;
 	message_response_sync response_sync;
+	message_find_handler find_handler;
 	void * slots;
 	void * current_slot;
 	int slot_buffer_size;
@@ -76,14 +81,15 @@ struct y_message_instance
 
 	The function will not exist NOW. When fetch a message it tries to handle it.
 */
-void message_loop(struct y_message_instance * instance);
+void message_loop(struct y_message_instance *instance);
 
 /**
 	@brief 将所有消息的状态初始化
 
 	一般用于初始化刚刚创立的消息缓冲区
 */
-void message_reset_all(struct y_message_instance * instance);
+void message_reset_all(struct y_message_instance *instance);
 
 #endif
+
 /** @} */

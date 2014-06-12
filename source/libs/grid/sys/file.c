@@ -17,6 +17,8 @@
 
 #include "dir.h"
 #include "file.h"
+#include "stream_file.h"
+#include "nocache_file.h"
 #include "sys/file_req.h"
 
 static ke_handle sys_mkfile(const char *name)
@@ -317,6 +319,7 @@ DLLEXPORT void * y_file_mmap(y_handle file, size_t len, page_prot_t prot, int fl
 DLLEXPORT int y_file_munmap(y_handle file, void *addr, size_t length)
 {
 	//TODO
+	return ENOSYS;
 }
 
 
