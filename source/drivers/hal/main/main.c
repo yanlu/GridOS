@@ -91,7 +91,11 @@ void __init __noreturn hal_main()
 	while (1) 
 	{
 		kt_schedule_driver();
-		dumy_idle_ops(0);	
+		/* If have no process, sleep */
+		if (!kt_schedule_running_count())
+			dumy_idle_ops(0);
+		else
+			kt_schedule();
 	}
 }
 
@@ -105,3 +109,14 @@ void ke_panic(char *why)
 {
 	hal_do_panic(why);
 }
+
+unsigned long hal_get_basic_kaddr(unsigned long phy)
+{
+	return HAL_GET_BASIC_KADDRESS(phy);
+}
+
+unsigned long hal_get_basic_phyaddr(void *vaddr)
+{
+	return HAL_GET_BASIC_PHYADDRESS(vaddr);
+}
+

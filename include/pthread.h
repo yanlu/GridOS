@@ -202,12 +202,12 @@ enum {
 /************************************************************************/
 /* Once Key                                                             */
 /************************************************************************/
-#define PTHREAD_ONCE_INIT       { PTW32_FALSE, 0, 0, 0}
+#define PTHREAD_ONCE_INIT       { 0, (pthread_spinlock_t)1, 0, 0}
 
 struct pthread_once_t_
 {
   int          done;        /* indicates if user function has been executed */
-  void *       lock;
+  pthread_spinlock_t lock;
   int          reserved1;
   int          reserved2;
 };
@@ -263,7 +263,17 @@ PTEXPORT int PTCDECL pthread_spin_unlock (pthread_spinlock_t * lock);
 /*
  * KEY
  */
+
+PTEXPORT int pthread_key_create(pthread_key_t *key, void *(*destructor)(void *));
+
+PTEXPORT int pthread_key_delete(pthread_key_t key);
+
+PTEXPORT int pthread_setspecific (pthread_key_t key, const void *value);
+
 PTEXPORT void *pthread_getspecific (pthread_key_t key);
+
+
+PTEXPORT int pthread_once(pthread_once_t *once_control, void (*init_routine) (void));
 
 END_C_DECLS;
 
